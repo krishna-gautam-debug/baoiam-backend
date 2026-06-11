@@ -51,7 +51,7 @@ project/
 
 ## Team Task Assignments
 
-### Intern 1 — Project Skeleton + DB Connection
+### Kajal — Project Skeleton + DB Connection
 **Files:** `app/db/database.py`, `app/main.py`, `.env`, `requirements.txt`, `README.md`
 
 **Tasks:**
@@ -69,7 +69,7 @@ project/
 
 ---
 
-### Intern 2 — Database Models + Migrations
+### Anshul — Database Models + Migrations
 **Files:** `app/models/models.py`, `app/models/__init__.py`, `alembic/`
 
 **Tasks:**
@@ -96,7 +96,7 @@ project/
 
 ---
 
-### Intern 3 — Auth Utilities + Pydantic Schemas
+### Bhoomi — Auth Utilities + Pydantic Schemas
 **Files:** `app/core/auth.py`, `app/schemas/user.py`
 
 **Tasks:**
@@ -119,7 +119,7 @@ Pydantic schemas (`schemas/user.py`):
 
 ---
 
-### Intern 4 — Auth Routes
+### Krishna — Auth Routes
 **Files:** `app/routes/user_router.py`
 
 **Tasks:**
@@ -138,7 +138,7 @@ Pydantic schemas (`schemas/user.py`):
 
 ---
 
-### Intern 5 — Razorpay Payment Routes
+### Khushi — Razorpay Payment Routes
 **Files:** `app/routes/payment_router.py`
 
 **Tasks:**
@@ -158,7 +158,7 @@ Pydantic schemas (`schemas/user.py`):
 
 ---
 
-### Intern 6 — Course + Progress Routes
+### Nandini — Course + Progress Routes
 **Files:** `app/routes/course_router.py`
 
 **Tasks:**
