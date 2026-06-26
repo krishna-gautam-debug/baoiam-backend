@@ -317,3 +317,351 @@ RAZORPAY_KEY_SECRET=your_razorpay_secret
 ---
 
 *Deadline: 2 days from start date. All tasks submitted as GitHub PR links.*
+
+
+# Sprint 2
+# Backend Team — Sprint 2 Task Assignments
+### Baoiam EdTech Platform — Website Go-Live
+**Lead:** Kartike  
+**Team:** Kajal, Anshul, Bhoomi, Krishna, Khushi, Nandini  
+**Deadline:** 7 Days  
+**Goal:** Auth (Phone OTP), Courses API, Inquiry API live and integrated
+
+---
+
+## What Changed From Sprint 1
+
+| Intern | Sprint 1 | Sprint 2 |
+|---|---|---|
+| Kajal | Project skeleton | No change — maintain infra |
+| Anshul | DB models | Update User model + add OTP model |
+| Bhoomi | Email/password auth utils | Rewrite for OTP flow + MSG91 |
+| Krishna | Email/password routes | Rewrite for send-otp + verify-otp |
+| Khushi | Razorpay routes | Course catalog + detail APIs |
+| Nandini | Course + progress routes | Inquiry form + platform stats API |
+
+---
+
+## New Auth Flow
+
+```
+User enters phone number
+→ POST /auth/send-otp     → generate 6-digit OTP, store in DB with 10 min expiry, send via MSG91
+→ User enters OTP
+→ POST /auth/verify-otp   → verify OTP, mark used, create User if new, return JWT
+→ All protected routes use same Bearer token as before
+```
+
+**Rule:** OTP expires in 10 minutes. Used OTPs cannot be reused. Never log OTP values.
+
+---
+
+## Task Assignments
+
+---
+
+### Kajal — Infrastructure + Environment
+**Same files as Sprint 1. New responsibility: keep everything running for others.**
+
+Tasks:
+- Add `MSG91_API_KEY`, `MSG91_SENDER_ID`, `MSG91_TEMPLATE_ID` to `.env` and `.env.example`
+- Add `twilio` or `requests` (for MSG91 HTTP call) to `requirements.txt`
+- Ensure DB connection still works after Anshul's model changes
+- Run `alembic upgrade head` after Anshul pushes new migration
+- Keep `GET /health` live at all times — others depend on it for testing
+
+**Definition of done:** Server starts cleanly with new env vars. Migration applies without errors.
+
+---
+
+### Anshul — Database Model Updates + New OTP Model
+**Files:** `app/models/models.py`, new Alembic migration
+
+**Changes to User model:**
+- Remove: `hashed_password`
+- Add: `phone_number` (String, unique, not null)
+- Add: `is_verified` (Boolean, default False)
+- Keep: id, name, email (optional now), role, created_at
+
+**New OTP model:**
+```
+OTP
+├── id           (Integer, primary key)
+├── phone_number (String, indexed)
+├── otp_code     (String 6)
+├── expires_at   (DateTime)
+├── is_used      (Boolean, default False)
+└── created_at   (DateTime)
+```
+
+**Also:**
+- Generate new Alembic migration: `alembic revision --autogenerate -m "otp_auth_update"`
+- Apply: `alembic upgrade head`
+- Export `OTP` model from `models/__init__.py`
+
+**Definition of done:** Both tables updated/created in pgAdmin. No orphan columns.
+
+---
+
+### Bhoomi — OTP Utilities + Updated Schemas
+**Files:** `app/core/auth.py`, `app/schemas/user.py`
+
+**Remove entirely:**
+- `hash_password()`
+- `verify_password()`
+
+**Keep as-is:**
+- `create_access_token(data: dict) -> str`
+- `get_current_user(token, db) -> User`
+
+**Add — OTP utility functions:**
+- `generate_otp() -> str` — returns random 6-digit string
+- `send_otp_msg91(phone: str, otp: str) -> bool` — HTTP POST to MSG91 API, returns True if sent
+- `is_otp_valid(otp_record: OTP) -> bool` — checks `is_used == False` and `expires_at > now()`
+
+**MSG91 API call (inside `send_otp_msg91`):**
+```python
+import requests
+
+def send_otp_msg91(phone: str, otp: str) -> bool:
+    url = "https://api.msg91.com/api/v5/otp"
+    payload = {
+        "mobile": f"91{phone}",
+        "otp": otp,
+        "template_id": os.getenv("MSG91_TEMPLATE_ID"),
+        "authkey": os.getenv("MSG91_API_KEY"),
+    }
+    response = requests.post(url, json=payload)
+    return response.status_code == 200
+```
+
+**Updated Pydantic schemas:**
+- Remove: `SignupRequest`, `LoginRequest`
+- Add: `SendOTPRequest` — phone_number (10 digit string, validated)
+- Add: `VerifyOTPRequest` — phone_number, otp_code
+- Add: `OTPResponse` — message: str
+- Keep: `TokenResponse`, `UserResponse`
+
+**Definition of done:** `generate_otp()` returns 6 digits. `is_otp_valid()` correctly rejects expired/used OTPs. MSG91 call tested with a real phone number.
+
+---
+
+### Krishna — Auth Routes (Full Rewrite)
+**Files:** `app/routes/user_router.py`
+
+**Remove entirely:**
+- `POST /auth/signup`
+- `POST /auth/login`
+
+**New endpoints:**
+
+`POST /auth/send-otp`
+```
+Input:  SendOTPRequest { phone_number }
+Logic:
+  1. Validate phone (10 digits, numeric)
+  2. Call generate_otp() → get 6-digit code
+  3. Save OTP record to DB: { phone_number, otp_code, expires_at = now + 10min, is_used = False }
+  4. Call send_otp_msg91(phone, otp)
+  5. Return { "message": "OTP sent successfully" }
+  
+Errors:
+  - Invalid phone format → 400
+  - MSG91 failure → 503 "SMS service unavailable"
+```
+
+`POST /auth/verify-otp`
+```
+Input:  VerifyOTPRequest { phone_number, otp_code }
+Logic:
+  1. Fetch latest unused OTP for this phone from DB
+  2. Call is_otp_valid(otp_record) — reject if expired or used
+  3. Mark otp_record.is_used = True
+  4. Check if User with this phone exists:
+       - Yes → fetch user
+       - No  → create new User { phone_number, is_verified=True }
+  5. Call create_access_token({ "sub": str(user.id) })
+  6. Return TokenResponse { access_token, token_type: "bearer" }
+
+Errors:
+  - OTP not found → 404
+  - OTP expired   → 400 "OTP expired"
+  - OTP already used → 400 "OTP already used"
+  - Wrong OTP     → 400 "Invalid OTP"
+```
+
+`GET /auth/me` — keep exactly as before (protected via `get_current_user`)
+
+**Definition of done:** Full flow tested in Postman — send OTP to real number, receive SMS, verify, get JWT, call `/auth/me` with token.
+
+---
+
+### Khushi — Course Catalog + Detail APIs
+**Files:** `app/routes/course_router.py` (new responsibility)
+
+**Context from design:**
+4 course categories visible: Web Development, Data Science, UI/UX Design, Digital Marketing.
+Each course has: title, description, category, price, avg salary, avg time to hire, student rating, tech stack tags, and modules list.
+
+**Endpoints:**
+
+`GET /courses`
+```
+Query params: ?category=web-development (optional filter)
+Returns: list of courses with { id, title, category, price, avg_salary, 
+         avg_time_to_hire, student_rating, tech_tags[] }
+Public — no auth required
+```
+
+`GET /courses/{id}`
+```
+Returns: full course detail including modules list
+{ id, title, description, category, price, avg_salary, avg_time_to_hire,
+  student_rating, tech_tags[], modules: [{ number, title, duration_hours }] }
+Public — no auth required
+```
+
+**Also:**
+- Add `Module` model to Anshul's models if not already there: id, course_id (FK), number, title, duration_hours
+- Write Pydantic schemas: `CourseListResponse`, `CourseDetailResponse`, `ModuleResponse`
+- Seed at least 2 courses with modules in DB for testing
+
+**Definition of done:** `GET /courses` returns seeded courses. `GET /courses?category=data-science` filters correctly. `GET /courses/1` returns full detail with modules.
+
+---
+
+### Nandini — Platform Stats API + Inquiry API
+**Files:** `app/routes/stats_router.py`, `app/routes/inquiry_router.py`
+
+**Stats API** (from hero section of design):
+`GET /stats`
+```
+Returns hardcoded for now (update from DB later):
+{
+  "students": "200K+",
+  "courses": "500+", 
+  "industry_connections": "200+",
+  "hiring_partners": "100+",
+  "satisfaction_percent": "95%"
+}
+Public — no auth required
+```
+
+**Inquiry API:**
+
+New DB model needed (tell Anshul):
+```
+Inquiry
+├── id         (Integer, primary key)
+├── name       (String)
+├── phone      (String)
+├── email      (String, optional)
+├── message    (String)
+└── created_at (DateTime)
+```
+
+`POST /inquiry`
+```
+Input: { name, phone, email (optional), message }
+Logic: validate input, save to DB, return { "message": "Inquiry submitted successfully" }
+Public — no auth required
+```
+
+`GET /inquiry` (admin only — protect with get_current_user + role check)
+```
+Returns: list of all inquiries (for admin panel later)
+```
+
+Pydantic schemas: `InquiryRequest`, `InquiryResponse`
+
+**Definition of done:** `POST /inquiry` saves to DB. `GET /stats` returns all 5 values. Verified in Postman.
+
+---
+
+## Updated API Contract
+
+| Method | Endpoint | Auth | Owner |
+|---|---|---|---|
+| GET | `/health` | Public | Kajal |
+| POST | `/auth/send-otp` | Public | Krishna |
+| POST | `/auth/verify-otp` | Public | Krishna |
+| GET | `/auth/me` | Bearer token | Krishna |
+| GET | `/courses` | Public | Khushi |
+| GET | `/courses/{id}` | Public | Khushi |
+| GET | `/stats` | Public | Nandini |
+| POST | `/inquiry` | Public | Nandini |
+| GET | `/inquiry` | Bearer token (admin) | Nandini |
+| POST | `/payment/create-order` | Bearer token | Khushi (Sprint 1) |
+| POST | `/payment/webhook` | Razorpay signature | Khushi (Sprint 1) |
+| GET | `/payment/status/{id}` | Bearer token | Khushi (Sprint 1) |
+
+---
+
+## Dependency Map
+
+```
+Kajal (infra + env vars)
+    └── Anshul (model updates + Inquiry model)
+            ├── Bhoomi (OTP utils — needs OTP model)
+            │       └── Krishna (auth routes — needs OTP utils)
+            ├── Khushi (needs Course + Module models)
+            └── Nandini (needs Inquiry model)
+```
+
+---
+
+## 7-Day Timeline
+
+| Day | Kajal | Anshul | Bhoomi | Krishna | Khushi | Nandini |
+|---|---|---|---|---|---|---|
+| 1 | Update .env, requirements.txt | Update User model, add OTP model | Remove old utils, write generate_otp + is_otp_valid | Study new flow, set up MSG91 test account | Read Course model, plan schemas | Plan stats + inquiry endpoints |
+| 2 | Run migration after Anshul | Generate + apply migration | Write send_otp_msg91, update schemas | Write send-otp endpoint | Write GET /courses with filter | Write GET /stats |
+| 3 | Test DB connection | Seed 2 courses with modules | Test OTP utils in Python shell | Write verify-otp endpoint | Write GET /courses/{id} | Write POST /inquiry + model |
+| 4 | Code review support | Help Khushi with Module model | Test full OTP flow with real SMS | Test full flow in Postman | Seed data, test both endpoints | Write GET /inquiry (admin) |
+| 5 | Integration — wire all routers in main.py | — | — | Fix issues from integration | Fix issues from integration | Fix issues from integration |
+| 6 | End-to-end test full flow | — | — | Re-test auth after integration | Re-test course APIs | Re-test stats + inquiry |
+| 7 | Buffer — bug fixes + deployment to Railway/Render | — | — | — | — | — |
+
+---
+
+## MSG91 Setup (Bhoomi + Krishna)
+
+1. Create account at msg91.com
+2. Get API key from dashboard
+3. Create an OTP template — note the `template_id`
+4. Add to `.env`:
+```
+MSG91_API_KEY=your_key_here
+MSG91_SENDER_ID=BAOIAM
+MSG91_TEMPLATE_ID=your_template_id
+```
+5. Test with a real Indian mobile number before integrating with Krishna's route
+
+---
+
+## Git Branches
+
+```
+main
+├── fix/otp-auth-models       ← Anshul
+├── fix/otp-auth-utils        ← Bhoomi  
+├── fix/auth-routes-otp       ← Krishna
+├── feature/course-apis       ← Khushi
+└── feature/stats-inquiry     ← Nandini
+```
+
+---
+
+## Lead Checklist (Kartike)
+
+- [ ] MSG91 account created, API key shared with Bhoomi securely (not over chat)
+- [ ] Anshul's migration applied cleanly before others start
+- [ ] Bhoomi tests OTP send with real phone before Krishna starts routes
+- [ ] Krishna's verify-otp correctly marks OTP as used — test this personally
+- [ ] All routers wired in main.py on Day 5
+- [ ] Full flow tested: send OTP → verify → get JWT → call /auth/me → browse courses
+- [ ] Deployed to Railway/Render on Day 7
+
+---
+
+*Sprint 2 — 7 day deadline. All tasks submitted as PRs to main repo.*
