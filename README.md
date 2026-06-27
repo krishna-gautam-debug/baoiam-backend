@@ -318,6 +318,7 @@ RAZORPAY_KEY_SECRET=your_razorpay_secret
 
 *Deadline: 2 days from start date. All tasks submitted as GitHub PR links.*
 
+---
 
 # Sprint 2
 # Backend Team — Sprint 2 Task Assignments
